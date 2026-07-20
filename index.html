@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Viabilidade de Leilão</title>
+<style>
+  :root{
+    --ink:#14202e; --ink-2:#243646; --muted:#697887; --hair:#dde3e6;
+    --paper:#eceff1; --surface:#ffffff; --surface-2:#f6f8f9;
+    --brass:#a87b3c; --brass-deep:#8a622b; --brass-tint:#f3ead9;
+    --go:#17663f; --go-tint:#e5f2ec; --no:#a83a28; --no-tint:#f8e9e5;
+    --shadow:0 1px 2px rgba(20,32,46,.05), 0 8px 24px rgba(20,32,46,.06);
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); background:var(--paper);
+    font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  .num{font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1;}
+  h1,h2,h3{margin:0; font-weight:600; letter-spacing:-.01em}
+  .serif{font-family:Georgia,"Times New Roman",serif}
+
+  /* ---------- Top bar ---------- */
+  header{
+    background:var(--ink); color:#fff; position:sticky; top:0; z-index:20;
+    border-bottom:2px solid var(--brass);
+  }
+  .bar{max-width:1180px; margin:0 auto; padding:14px 22px; display:flex; align-items:center; gap:14px;}
+  .mark{width:30px;height:30px;flex:0 0 auto}
+  .brand{display:flex;flex-direction:column;line-height:1.15}
+  .brand b{font-size:16px; letter-spacing:.01em}
+  .brand span{font-size:11.5px; color:#9fb0c0; text-transform:uppercase; letter-spacing:.13em}
+  .idline{margin-left:auto; text-align:right; color:#c6d2dd; font-size:12.5px}
+  .idline strong{color:#fff; font-weight:600}
+  .toolbtns{display:flex; gap:8px; margin-left:14px}
+  .tbtn{
+    background:transparent; color:#c6d2dd; border:1px solid #33475a; border-radius:8px;
+    padding:7px 11px; font-size:12.5px; cursor:pointer; font-family:inherit; white-space:nowrap;
+  }
+  .tbtn:hover{color:#fff; border-color:var(--brass); background:#1c2b3b}
+
+  /* ---------- Layout ---------- */
+  main{max-width:1180px; margin:0 auto; padding:22px; display:grid; grid-template-columns:1fr 400px; gap:22px; align-items:start;}
+  @media (max-width:900px){ main{grid-template-columns:1fr; padding:16px} }
+
+  .card{background:var(--surface); border:1px solid var(--hair); border-radius:var(--radius); box-shadow:var(--shadow); margin-bottom:18px; overflow:hidden}
+  .card > .head{padding:13px 18px; border-bottom:1px solid var(--hair); display:flex; align-items:baseline; gap:10px; background:var(--surface-2)}
+  .card > .head h2{font-size:13px; text-transform:uppercase; letter-spacing:.11em; color:var(--ink)}
+  .card > .head .step{font-family:Georgia,serif; font-size:13px; color:var(--brass); font-style:italic}
+  .card > .head .hint{margin-left:auto; font-size:12px; color:var(--muted)}
+  .body{padding:16px 18px}
+
+  .grid{display:grid; grid-template-columns:1fr 1fr; gap:12px 16px}
+  .grid.three{grid-template-columns:1fr 1fr 1fr}
+  @media (max-width:520px){ .grid, .grid.three{grid-template-columns:1fr} }
+  .field{display:flex; flex-direction:column; gap:5px; min-width:0}
+  .field.span2{grid-column:1 / -1}
+  label{font-size:12px; color:var(--muted); font-weight:500}
+  input,select{
+    font-family:inherit; font-size:14.5px; color:var(--ink);
+    padding:9px 11px; border:1px solid var(--hair); border-radius:8px; background:#fff; width:100%;
+  }
+  input:focus,select:focus{outline:2px solid var(--brass); outline-offset:-1px; border-color:var(--brass)}
+  input.money,input.pct{text-align:right}
+  .num-in{position:relative}
+  .num-in .aff{position:absolute; top:50%; transform:translateY(-50%); color:var(--muted); font-size:13px; pointer-events:none}
+  .num-in .aff.l{left:11px} .num-in .aff.r{right:11px}
+  .num-in input.money{padding-left:34px} .num-in input.pct{padding-right:26px}
+
+  /* ---------- Despesas ---------- */
+  .desp-head, .desp-row{display:grid; grid-template-columns:1fr 150px 118px 32px; gap:8px; align-items:center}
+  .desp-head{font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); padding:0 2px 8px}
+  .desp-head span:nth-child(3){text-align:right}
+  .desp-row{padding:5px 0}
+  .desp-row input, .desp-row select{padding:8px 10px; font-size:13.5px}
+  .desp-row .valwrap{position:relative}
+  .desp-row .valwrap .aff{position:absolute; top:50%; transform:translateY(-50%); color:var(--muted); font-size:12px; pointer-events:none}
+  .desp-row .valwrap .aff.l{left:9px} .desp-row .valwrap .aff.r{right:9px}
+  .desp-row input.rowval{text-align:right}
+  .desp-row input.rowval.money{padding-left:28px}
+  .desp-row input.rowval.pct{padding-right:22px}
+  .comp{font-size:11.5px; color:var(--muted); text-align:right; padding-top:3px}
+  .del{border:none; background:none; color:var(--muted); cursor:pointer; font-size:17px; line-height:1; border-radius:6px; width:30px; height:30px}
+  .del:hover{background:var(--no-tint); color:var(--no)}
+  .addbtn{margin-top:12px; background:var(--brass-tint); color:var(--brass-deep); border:1px dashed var(--brass); border-radius:8px; padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit}
+  .addbtn:hover{background:#efe2c9}
+  .desp-total{display:flex; justify-content:space-between; align-items:baseline; margin-top:14px; padding-top:13px; border-top:2px solid var(--ink)}
+  .desp-total .lab{font-size:12.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+  .desp-total .val{font-size:20px; font-weight:700}
+
+  .seg{display:inline-flex; border:1px solid var(--hair); border-radius:8px; overflow:hidden}
+  .seg button{border:none; background:#fff; padding:8px 16px; font-family:inherit; font-size:13.5px; cursor:pointer; color:var(--muted)}
+  .seg button.on{background:var(--ink); color:#fff; font-weight:600}
+
+  .fin-extra{margin-top:14px; padding:13px 15px; background:var(--surface-2); border:1px solid var(--hair); border-radius:8px}
+  .fin-extra .grid{grid-template-columns:1fr 1fr}
+  .microlab{font-size:11.5px; color:var(--muted); margin:0 0 10px}
+
+  /* ---------- Veredito ---------- */
+  .panel{position:sticky; top:82px}
+  @media (max-width:900px){ .panel{position:static} }
+  .verdict{border-radius:12px; overflow:hidden; box-shadow:var(--shadow); border:1px solid var(--hair)}
+  .verdict .top{padding:20px 20px 16px; color:#fff; background:var(--ink); position:relative}
+  .verdict .top.go{background:linear-gradient(160deg,#17663f,#0f4d2f)}
+  .verdict .top.no{background:linear-gradient(160deg,#a83a28,#872e20)}
+  .verdict .top.neutral{background:linear-gradient(160deg,#243646,#14202e)}
+  .stamp{font-size:12px; letter-spacing:.16em; text-transform:uppercase; opacity:.85; display:flex; align-items:center; gap:8px}
+  .roi-hero{display:flex; align-items:flex-end; gap:10px; margin-top:6px}
+  .roi-hero .big{font-size:52px; font-weight:700; line-height:.95; letter-spacing:-.02em}
+  .roi-hero .cap{font-size:12.5px; opacity:.85; padding-bottom:9px}
+  .target-line{margin-top:12px; font-size:13px; opacity:.92; display:flex; justify-content:space-between; border-top:1px solid rgba(255,255,255,.18); padding-top:11px}
+  .target-line b{font-weight:600}
+
+  .cascade{background:#fff; padding:16px 20px}
+  .cascade .row{display:flex; justify-content:space-between; align-items:baseline; padding:7px 0; font-size:14px}
+  .cascade .row .k{color:var(--ink-2)}
+  .cascade .row .k small{color:var(--muted); font-size:11.5px; display:block; margin-top:1px}
+  .cascade .row .v{font-weight:600}
+  .cascade .row.sub .k, .cascade .row.sub .v{color:var(--muted); font-weight:500; font-size:13px}
+  .cascade .minus .v{color:var(--no)}
+  .cascade .rule{height:1px; background:var(--hair); margin:6px 0}
+  .cascade .rule.strong{height:2px; background:var(--ink); margin:9px 0}
+  .cascade .result{padding:11px 0}
+  .cascade .result .k{font-weight:600}
+  .cascade .result .v{font-size:19px; font-weight:700}
+  .cascade .result.pos .v{color:var(--go)} .cascade .result.neg .v{color:var(--no)}
+  .invest{background:var(--surface-2); border-top:1px solid var(--hair); padding:13px 20px; display:flex; justify-content:space-between; align-items:baseline}
+  .invest .k{font-size:12.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
+  .invest .v{font-size:17px; font-weight:700}
+
+  .note{font-size:11.5px; color:var(--muted); line-height:1.5; padding:12px 20px; background:#fff; border-top:1px solid var(--hair)}
+  .note b{color:var(--ink-2)}
+
+  footer{max-width:1180px; margin:0 auto; padding:8px 22px 40px; color:var(--muted); font-size:11.5px}
+
+  /* ---------- Print ---------- */
+  @media print{
+    header{position:static; box-shadow:none}
+    .toolbtns,.addbtn,.del{display:none !important}
+    main{display:block; max-width:none; padding:0}
+    .panel{position:static}
+    .card,.verdict{break-inside:avoid; box-shadow:none}
+    body{background:#fff}
+    input,select{border-color:#ccc}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="#a87b3c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l4-4"/><path d="M5 15l4-4"/><path d="M12.5 4.5l3 3"/><path d="M7.5 9.5l3 3"/><path d="M3 21h9"/><path d="M14 13l-3 3"/></svg>
+    <div class="brand"><b>Viabilidade de Leilão</b><span>Controle de despesas &amp; rentabilidade</span></div>
+    <div class="idline" id="idline"></div>
+    <div class="toolbtns">
+      <button class="tbtn" onclick="window.print()">Exportar PDF</button>
+      <button class="tbtn" onclick="exportJSON()">Salvar arquivo</button>
+      <button class="tbtn" onclick="document.getElementById('imp').click()">Abrir arquivo</button>
+      <button class="tbtn" onclick="resetAll()">Nova análise</button>
+      <input type="file" id="imp" accept="application/json" style="display:none" onchange="importJSON(event)">
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- LEFT: inputs -->
+  <div>
+    <section class="card">
+      <div class="head"><span class="step">i.</span><h2>A oportunidade</h2><span class="hint">Dados do imóvel e do leilão</span></div>
+      <div class="body">
+        <div class="grid">
+          <div class="field"><label>Tipo de imóvel</label><input data-k="tipo" placeholder="Apartamento"></div>
+          <div class="field"><label>Cidade / UF</label><input data-k="cidade" placeholder="SBO/SP"></div>
+          <div class="field span2"><label>Link do imóvel</label><input data-k="link" placeholder="https://..."></div>
+          <div class="field"><label>Modalidade</label>
+            <select data-k="modalidade">
+              <option>1º Leilão</option><option>2º Leilão</option>
+              <option>Licitação Aberta</option><option>Venda Direta</option><option>Outra</option>
+            </select>
+          </div>
+          <div class="field"><label>Leiloeiro</label><input data-k="leiloeiro" placeholder="Nome"></div>
+          <div class="field"><label>Data do leilão</label><input type="date" data-k="dataLeilao"></div>
+          <div class="field"><label>Área (m²)</label><div class="num-in"><input class="money" data-k="area" data-fmt="plain" inputmode="decimal" placeholder="0"><span class="aff r">m²</span></div></div>
+          <div class="field"><label>Valor de avaliação</label><div class="num-in"><span class="aff l">R$</span><input class="money" data-k="avaliacao" data-fmt="money" inputmode="decimal" placeholder="170.000"></div></div>
+          <div class="field"><label>Lance mínimo</label><div class="num-in"><span class="aff l">R$</span><input class="money" data-k="lanceMinimo" data-fmt="money" inputmode="decimal" placeholder="66.347"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="head"><span class="step">ii.</span><h2>O negócio</h2><span class="hint">Sua tese de compra e venda</span></div>
+      <div class="body">
+        <div class="grid">
+          <div class="field"><label>Valor da compra / lance</label><div class="num-in"><span class="aff l">R$</span><input class="money" data-k="lance" data-fmt="money" inputmode="decimal" placeholder="85.000"></div></div>
+          <div class="field"><label>Valor esperado de venda</label><div class="num-in"><span class="aff l">R$</span><input class="money" data-k="venda" data-fmt="money" inputmode="decimal" placeholder="185.000"></div></div>
+          <div class="field"><label>Prazo até a venda</label><div class="num-in"><input class="money" data-k="prazo" data-fmt="plain" inputmode="numeric" placeholder="12"><span class="aff r">meses</span></div></div>
+          <div class="field"><label>ROI mínimo aceitável</label><div class="num-in"><input class="pct" data-k="roiMin" data-fmt="pct" inputmode="decimal" placeholder="25"><span class="aff r">%</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="head"><span class="step">iii.</span><h2>Pagamento</h2><span class="hint">À vista ou financiado</span></div>
+      <div class="body">
+        <div class="seg" id="finseg">
+          <button data-fin="0" class="on">À vista</button>
+          <button data-fin="1">Financiado</button>
+        </div>
+        <div id="finBlock" style="display:none">
+          <div class="fin-extra">
+            <p class="microlab">A parcela e o saldo devedor começam com uma estimativa. Se você já tem os números reais do banco, é só sobrescrever.</p>
+            <div class="grid">
+              <div class="field"><label>Entrada</label><div class="num-in"><input class="pct" data-k="pctEntrada" data-fmt="pct" inputmode="decimal" placeholder="20"><span class="aff r">%</span></div></div>
+              <div class="field"><label>Valor financiado</label><div class="num-in"><span class="aff l">R$</span><input class="money" id="finVal" disabled></div></div>
+              <div class="field"><label>Parcela mensal <span id="parcAuto" style="color:var(--brass)"></span></label><div class="num-in"><span class="aff l">R$</span><input class="money" data-k="parcelaOverride" data-fmt="money" inputmode="decimal" placeholder="auto"></div></div>
+              <div class="field"><label>Saldo devedor na venda <span id="saldoAuto" style="color:var(--brass)"></span></label><div class="num-in"><span class="aff l">R$</span><input class="money" data-k="saldoOverride" data-fmt="money" inputmode="decimal" placeholder="auto"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="head"><span class="step">iv.</span><h2>Despesas</h2><span class="hint">Adicione quantas precisar — todas entram na conta</span></div>
+      <div class="body">
+        <div class="desp-head">
+          <span>Descrição</span><span>Tipo</span><span>Valor</span><span></span>
+        </div>
+        <div id="despList"></div>
+        <button class="addbtn" onclick="addDesp()">+ Adicionar despesa</button>
+        <div class="desp-total">
+          <span class="lab">Total de despesas</span>
+          <span class="val num" id="despTotal">R$ 0</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- RIGHT: verdict -->
+  <div class="panel">
+    <div class="verdict">
+      <div class="top neutral" id="vTop">
+        <div class="stamp" id="vStamp">Aguardando dados</div>
+        <div class="roi-hero"><div class="big num" id="vRoi">—</div><div class="cap">ROI da operação</div></div>
+        <div class="target-line"><span>Sua régua: <b class="num" id="vTarget">—</b></span><span id="vMargin"></span></div>
+      </div>
+      <div class="cascade" id="cascade"></div>
+      <div class="invest"><span class="k">Capital investido</span><span class="v num" id="vCapital">R$ 0</span></div>
+      <div class="note">
+        <b>IR é estimativa</b> (alíquota × lucro). O ganho de capital em revenda tem regras próprias — confirme com seu contador antes de decidir. Prestação e saldo do financiamento são aproximados e podem ser sobrescritos.
+      </div>
+    </div>
+    <div class="card" style="margin-top:18px">
+      <div class="body" style="padding:14px 18px">
+        <div class="field"><label>Alíquota de IR sobre o lucro</label><div class="num-in"><input class="pct" data-k="aliquotaIR" data-fmt="pct" inputmode="decimal" placeholder="15"><span class="aff r">%</span></div></div>
+      </div>
+    </div>
+  </div>
+</main>
+<footer>Os dados ficam salvos apenas neste navegador. Nada é enviado para fora.</footer>
+
+<script>
+"use strict";
+
+/* ---------------- estado ---------------- */
+const DEFAULT_DESP = () => ([
+  {id:uid(), nome:'ITBI',                         tipo:'pctLance', pct:0.02},
+  {id:uid(), nome:'Registro',                     tipo:'fixo',     valor:1600},
+  {id:uid(), nome:'Emolumentos / carta de arremat.',tipo:'fixo',   valor:2700},
+  {id:uid(), nome:'Comissão do leiloeiro',        tipo:'pctLance', pct:0.05},
+  {id:uid(), nome:'Reforma',                      tipo:'fixo',     valor:5000},
+  {id:uid(), nome:'IPTU',                         tipo:'mensal',   valor:30},
+  {id:uid(), nome:'Condomínio',                   tipo:'mensal',   valor:300},
+  {id:uid(), nome:'Comissão de venda (corretor)', tipo:'pctVenda', pct:0.05},
+  {id:uid(), nome:'Advogado',                     tipo:'fixo',     valor:7000},
+  {id:uid(), nome:'Dívidas até a arrematação (IPTU/cond.)',tipo:'fixo',valor:20000},
+]);
+
+const DEFAULT_STATE = () => ({
+  tipo:'', cidade:'', link:'', modalidade:'Licitação Aberta', leiloeiro:'', dataLeilao:'',
+  area:0, avaliacao:0, lanceMinimo:0,
+  lance:0, venda:0, prazo:12, roiMin:0.25,
+  financiado:0, pctEntrada:0.20, parcelaOverride:'', saldoOverride:'',
+  aliquotaIR:0.15,
+  despesas: DEFAULT_DESP(),
+});
+
+let S = load() || DEFAULT_STATE();
+
+/* ---------------- utils ---------------- */
+function uid(){ return 'd'+Math.random().toString(36).slice(2,9); }
+const nf  = new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0});
+const nf2 = new Intl.NumberFormat('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:2});
+const brl = n => nf.format(isFinite(n)?n:0);
+function parseNum(str){
+  if(typeof str==='number') return str;
+  if(!str) return 0;
+  let s = String(str).replace(/[^\d.,-]/g,'');
+  if(s.indexOf('.')>-1 && s.indexOf(',')>-1) s = s.replace(/\./g,'').replace(',', '.');
+  else if(s.indexOf(',')>-1) s = s.replace(',', '.');
+  const v = parseFloat(s);
+  return isNaN(v)?0:v;
+}
+
+/* ---------------- modelo financeiro ---------------- */
+function compute(){
+  const lance=+S.lance||0, venda=+S.venda||0, prazo=+S.prazo||0;
+  let totalUser=0, pctVendaTotal=0;
+  const lines=[];
+  for(const d of S.despesas){
+    let v=0;
+    if(d.tipo==='fixo')      v=+d.valor||0;
+    else if(d.tipo==='mensal')v=(+d.valor||0)*prazo;
+    else if(d.tipo==='pctLance')v=(+d.pct||0)*lance;
+    else if(d.tipo==='pctVenda'){v=(+d.pct||0)*venda; pctVendaTotal+=v;}
+    totalUser+=v; lines.push({d,v});
+  }
+  const fin = !!S.financiado;
+  const entrada = fin ? (+S.pctEntrada||0)*lance : 0;
+  const financiadoVal = fin ? Math.max(lance-entrada,0) : 0;
+  const aquisicao = fin ? entrada : lance;
+  const parcelaAuto = financiadoVal*0.0097;
+  const saldoAuto   = financiadoVal*(1-0.0023809375*prazo);
+  const parcela = fin ? (S.parcelaOverride!=='' && S.parcelaOverride!=null ? +S.parcelaOverride : parcelaAuto) : 0;
+  const saldo   = fin ? (S.saldoOverride!=='' && S.saldoOverride!=null ? +S.saldoOverride : saldoAuto) : 0;
+  const prestacoes = parcela*prazo;
+
+  const totalDespesas = totalUser + prestacoes;
+  const lucroBruto = venda - aquisicao - totalDespesas - saldo;
+  const ir = Math.max(lucroBruto,0)*(+S.aliquotaIR||0);
+  const lucroLiquido = lucroBruto - ir;
+  const capitalInvestido = aquisicao + totalDespesas - pctVendaTotal;
+  const roi = capitalInvestido>0 ? lucroLiquido/capitalInvestido : 0;
+
+  return {lines,totalUser,totalDespesas,aquisicao,entrada,financiadoVal,parcela,parcelaAuto,
+          saldo,saldoAuto,prestacoes,lucroBruto,ir,lucroLiquido,capitalInvestido,roi,fin,venda};
+}
+
+/* ---------------- render ---------------- */
+const TIPOS = [
+  ['fixo','Valor fixo'],['mensal','Mensal (× prazo)'],
+  ['pctLance','% do lance'],['pctVenda','% da venda'],
+];
+
+function renderDesp(){
+  const R = compute();
+  const wrap = document.getElementById('despList');
+  wrap.innerHTML='';
+  S.despesas.forEach((d,i)=>{
+    const row = document.createElement('div');
+    row.className='desp-row';
+    const isPct = d.tipo==='pctLance'||d.tipo==='pctVenda';
+    const line = R.lines.find(l=>l.d===d);
+    const comp = line ? line.v : 0;
+    const showComp = isPct || d.tipo==='mensal';
+    row.innerHTML = `
+      <input value="${escapeAttr(d.nome)}" data-di="${i}" data-df="nome" placeholder="Descrição">
+      <select data-di="${i}" data-df="tipo">${TIPOS.map(t=>`<option value="${t[0]}" ${d.tipo===t[0]?'selected':''}>${t[1]}</option>`).join('')}</select>
+      <div class="valwrap">
+        ${isPct?'':'<span class="aff l">R$</span>'}
+        <input class="rowval ${isPct?'pct':'money'}" inputmode="decimal" data-di="${i}" data-df="${isPct?'pct':'valor'}"
+          value="${isPct ? nf2.format((d.pct||0)*100) : nf2.format(d.valor||0)}">
+        ${isPct?'<span class="aff r">%</span>':''}
+      </div>
+      <button class="del" title="Remover" onclick="delDesp(${i})">×</button>
+      ${showComp?`<div style="grid-column:1/-1" class="comp">${escapeHtml(d.nome||'—')} = <span class="num">${brl(comp)}</span></div>`:''}
+    `;
+    wrap.appendChild(row);
+  });
+  document.getElementById('despTotal').textContent = brl(R.totalUser);
+  bindDespInputs();
+}
+
+function bindDespInputs(){
+  document.querySelectorAll('#despList [data-di]').forEach(el=>{
+    const i=+el.dataset.di, f=el.dataset.df;
+    if(el.tagName==='SELECT'){
+      el.onchange=()=>{ S.despesas[i].tipo=el.value; renderDesp(); save(); renderOut(); };
+    } else if(f==='nome'){
+      el.oninput=()=>{ S.despesas[i].nome=el.value; save(); renderOut(); };
+    } else {
+      el.oninput=()=>{
+        const v=parseNum(el.value);
+        if(f==='pct') S.despesas[i].pct=v/100; else S.despesas[i].valor=v;
+        save(); renderOut();
+        const R=compute(); document.getElementById('despTotal').textContent=brl(R.totalUser);
+        const line=R.lines.find(l=>l.d===S.despesas[i]);
+        const comp=el.closest('.desp-row').querySelector('.comp .num');
+        if(comp&&line) comp.textContent=brl(line.v);
+      };
+      el.onblur=()=>{
+        const v=parseNum(el.value);
+        el.value = (f==='pct') ? nf2.format(v) : nf2.format(v);
+      };
+    }
+  });
+}
+
+window.addDesp=function(){ S.despesas.push({id:uid(),nome:'',tipo:'fixo',valor:0}); renderDesp(); save(); renderOut(); };
+window.delDesp=function(i){ S.despesas.splice(i,1); renderDesp(); save(); renderOut(); };
+
+function renderOut(){
+  const R = compute();
+  // id line
+  const parts=[];
+  if(S.tipo) parts.push(`<strong>${escapeHtml(S.tipo)}</strong>`);
+  if(S.cidade) parts.push(escapeHtml(S.cidade));
+  if(S.dataLeilao) parts.push('leilão '+fmtDate(S.dataLeilao));
+  document.getElementById('idline').innerHTML = parts.join(' · ');
+
+  // verdict
+  const hasData = (+S.lance>0 && +S.venda>0);
+  const top=document.getElementById('vTop'), stamp=document.getElementById('vStamp');
+  const roiEl=document.getElementById('vRoi'), tgt=document.getElementById('vTarget'), mg=document.getElementById('vMargin');
+  tgt.textContent = pct(S.roiMin);
+  if(!hasData){
+    top.className='top neutral'; stamp.innerHTML='Aguardando dados';
+    roiEl.textContent='—'; mg.textContent='';
+  } else {
+    const go = R.roi >= (+S.roiMin||0);
+    top.className='top '+(go?'go':'no');
+    stamp.innerHTML = (go?'●&nbsp; VIÁVEL':'●&nbsp; INVIÁVEL');
+    roiEl.textContent = pct(R.roi);
+    const diff=(R.roi-(+S.roiMin||0));
+    mg.innerHTML = (diff>=0?'+':'')+(diff*100).toFixed(1)+' p.p. vs régua';
+  }
+
+  // cascade
+  const c=document.getElementById('cascade');
+  const rows=[];
+  rows.push(cRow('Valor de venda', brl(R.venda),'',''));
+  rows.push(cRow(R.fin?'Entrada':'Lance', '− '+brl(R.aquisicao),'minus',''));
+  rows.push(cRow('Total de despesas', '− '+brl(R.totalDespesas),'minus', R.fin?`inclui ${brl(R.prestacoes)} de prestações`:''));
+  if(R.fin) rows.push(cRow('Saldo do financiamento','− '+brl(R.saldo),'minus','quitado na venda'));
+  rows.push('<div class="rule strong"></div>');
+  rows.push(cResult('Lucro bruto', brl(R.lucroBruto), R.lucroBruto>=0));
+  rows.push(cRow('Imposto de renda (est.)','− '+brl(R.ir),'minus sub', pct(S.aliquotaIR)+' sobre o lucro'));
+  rows.push('<div class="rule"></div>');
+  rows.push(cResult('Lucro líquido', brl(R.lucroLiquido), R.lucroLiquido>=0));
+  c.innerHTML=rows.join('');
+
+  document.getElementById('vCapital').textContent = brl(R.capitalInvestido);
+
+  // financiamento fields
+  document.getElementById('finBlock').style.display = R.fin?'block':'none';
+  document.querySelector('#finseg [data-fin="0"]').classList.toggle('on',!R.fin);
+  document.querySelector('#finseg [data-fin="1"]').classList.toggle('on',R.fin);
+  if(R.fin){
+    const fv=document.getElementById('finVal'); if(fv) fv.value=brl(R.financiadoVal).replace('R$','').trim();
+    document.getElementById('parcAuto').textContent = (S.parcelaOverride!=='') ? '' : '· auto '+brl(R.parcelaAuto);
+    document.getElementById('saldoAuto').textContent = (S.saldoOverride!=='') ? '' : '· auto '+brl(R.saldoAuto);
+  }
+}
+
+function cRow(k,v,cls,sub){
+  return `<div class="row ${cls}"><span class="k">${k}${sub?`<small>${sub}</small>`:''}</span><span class="v num">${v}</span></div>`;
+}
+function cResult(k,v,pos){
+  return `<div class="row result ${pos?'pos':'neg'}"><span class="k">${k}</span><span class="v num">${v}</span></div>`;
+}
+function pct(f){ return (( (+f||0)*100).toFixed(1)).replace('.',',')+'%'; }
+
+/* ---------------- bindings ---------------- */
+function bindMain(){
+  document.querySelectorAll('[data-k]').forEach(el=>{
+    const k=el.dataset.k, fmt=el.dataset.fmt;
+    // init value
+    if(el.type==='date'){ el.value=S[k]||''; }
+    else if(el.tagName==='SELECT'){ el.value=S[k]||''; }
+    else if(fmt==='money'||fmt==='plain'){ el.value = S[k]? nf2.format(S[k]) : ''; }
+    else if(fmt==='pct'){ el.value = (S[k]!==''&&S[k]!=null)? nf2.format((+S[k])*100) : ''; }
+    else { el.value=S[k]||''; }
+
+    const handler=()=>{
+      if(fmt==='money'||fmt==='plain') S[k]=parseNum(el.value);
+      else if(fmt==='pct') S[k]=parseNum(el.value)/100;
+      else S[k]=el.value;
+      save(); renderOut();
+      if(k==='lance'||k==='venda'||k==='prazo') { renderDesp(); }
+    };
+    if(el.tagName==='SELECT'||el.type==='date') el.onchange=handler;
+    else {
+      el.oninput=handler;
+      if(fmt==='money'||fmt==='plain') el.onblur=()=>{ el.value = S[k]? nf2.format(S[k]) : ''; };
+      if(fmt==='pct') el.onblur=()=>{ el.value=(S[k]!==''&&S[k]!=null)? nf2.format((+S[k])*100):''; };
+    }
+  });
+  document.querySelectorAll('#finseg button').forEach(b=>{
+    b.onclick=()=>{ S.financiado=+b.dataset.fin; save(); renderOut(); renderDesp(); };
+  });
+}
+
+/* ---------------- persistência ---------------- */
+const KEY='viab_leilao_v1';
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+function load(){ try{ const r=localStorage.getItem(KEY); return r?JSON.parse(r):null; }catch(e){ return null; } }
+window.resetAll=function(){ if(confirm('Limpar tudo e começar uma nova análise?')){ S=DEFAULT_STATE(); save(); boot(); } };
+window.exportJSON=function(){
+  const name=(S.tipo||'analise')+'_'+(S.cidade||'').replace(/\W+/g,'')+'.json';
+  const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name.replace(/^_+/,''); a.click();
+};
+window.importJSON=function(ev){
+  const f=ev.target.files[0]; if(!f)return;
+  const r=new FileReader();
+  r.onload=()=>{ try{ S=Object.assign(DEFAULT_STATE(), JSON.parse(r.result)); if(!Array.isArray(S.despesas)||!S.despesas.length) S.despesas=DEFAULT_DESP(); save(); boot(); }catch(e){ alert('Arquivo inválido.'); } };
+  r.readAsText(f); ev.target.value='';
+};
+
+/* ---------------- helpers ---------------- */
+function escapeHtml(s){ return String(s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+function escapeAttr(s){ return escapeHtml(s).replace(/"/g,'&quot;'); }
+function fmtDate(s){ try{ const [y,m,d]=s.split('-'); return `${d}/${m}/${y}`; }catch(e){ return s; } }
+
+function boot(){ bindMain(); renderDesp(); renderOut(); }
+boot();
+</script>
+</body>
+</html>
