@@ -1,40 +1,56 @@
 "use strict";
 
-/* ---------------- estado ---------------- */
-const DEFAULT_DESP = () => [
-    { id: uid(), nome: "ITBI", tipo: "pctLance", pct: 0.02 },
-    { id: uid(), nome: "Registro", tipo: "fixo", valor: 1600 },
-    {
-        id: uid(),
-        nome: "Emolumentos / carta de arremat.",
-        tipo: "fixo",
-        valor: 2700,
-    },
-    {
-        id: uid(),
-        nome: "Comissão do leiloeiro",
-        tipo: "pctLance",
-        pct: 0.05,
-    },
-    { id: uid(), nome: "Reforma", tipo: "fixo", valor: 5000 },
-    { id: uid(), nome: "IPTU", tipo: "mensal", valor: 30 },
-    { id: uid(), nome: "Condomínio", tipo: "mensal", valor: 300 },
-    {
-        id: uid(),
-        nome: "Comissão de venda (corretor)",
-        tipo: "pctVenda",
-        pct: 0.05,
-    },
-    { id: uid(), nome: "Advogado", tipo: "fixo", valor: 7000 },
-    {
-        id: uid(),
-        nome: "Dívidas até a arrematação (IPTU/cond.)",
-        tipo: "fixo",
-        valor: 20000,
-    },
+/* ============================================================
+ * Auction Property Viability Calculator
+ *
+ * The UI is in Portuguese (pt-BR) and the persisted state keys
+ * mirror the form fields (lance, venda, despesas, ...), which is
+ * the contract shared with index.html (data-k) and the saved
+ * localStorage / exported JSON. Those keys are kept as-is on
+ * purpose; everything else uses descriptive English names.
+ * ============================================================ */
+
+/* ---------------- financial model constants ---------------- */
+
+// Financing is approximated with a 35-year (420-month) linear
+// amortization. These estimates can always be overridden by the
+// user with the bank's real numbers.
+const FINANCING_TERM_MONTHS = 420;
+const ESTIMATED_INSTALLMENT_RATE = 0.0097; // monthly payment ≈ 0.97% of financed amount
+
+const STORAGE_KEY = "viab_leilao_v1";
+
+/* ---------------- formatters ---------------- */
+const brlFormatter = new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    maximumFractionDigits: 0,
+});
+const decimalFormatter = new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+});
+const formatBRL = (value) => brlFormatter.format(isFinite(value) ? value : 0);
+
+/* ---------------- default state ---------------- */
+function createId() {
+    return "d" + Math.random().toString(36).slice(2, 9);
+}
+
+const createDefaultExpenses = () => [
+    { id: createId(), nome: "ITBI", tipo: "pctLance", pct: 0.02 },
+    { id: createId(), nome: "Registro", tipo: "fixo", valor: 1600 },
+    { id: createId(), nome: "Emolumentos / carta de arremat.", tipo: "fixo", valor: 2700 },
+    { id: createId(), nome: "Comissão do leiloeiro", tipo: "pctLance", pct: 0.05 },
+    { id: createId(), nome: "Reforma", tipo: "fixo", valor: 5000 },
+    { id: createId(), nome: "IPTU", tipo: "mensal", valor: 30 },
+    { id: createId(), nome: "Condomínio", tipo: "mensal", valor: 300 },
+    { id: createId(), nome: "Comissão de venda (corretor)", tipo: "pctVenda", pct: 0.05 },
+    { id: createId(), nome: "Advogado", tipo: "fixo", valor: 7000 },
+    { id: createId(), nome: "Dívidas até a arrematação (IPTU/cond.)", tipo: "fixo", valor: 20000 },
 ];
 
-const DEFAULT_STATE = () => ({
+const createDefaultState = () => ({
     tipo: "",
     cidade: "",
     link: "",
@@ -53,452 +69,519 @@ const DEFAULT_STATE = () => ({
     parcelaOverride: "",
     saldoOverride: "",
     aliquotaIR: 0.15,
-    despesas: DEFAULT_DESP(),
+    despesas: createDefaultExpenses(),
 });
 
-let S = load() || DEFAULT_STATE();
+let state = loadStoredState() || createDefaultState();
 
-/* ---------------- utils ---------------- */
-function uid() {
-    return "d" + Math.random().toString(36).slice(2, 9);
-}
-const nf = new Intl.NumberFormat("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-    maximumFractionDigits: 0,
-});
-const nf2 = new Intl.NumberFormat("pt-BR", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-});
-const brl = (n) => nf.format(isFinite(n) ? n : 0);
-function parseNum(str) {
-    if (typeof str === "number") return str;
-    if (str == null || str === "") return 0;
-    let s = String(str)
-        .trim()
-        .replace(/[^\d.,-]/g, "");
-    if (s === "") return 0;
-    const hasComma = s.indexOf(",") > -1,
-        hasDot = s.indexOf(".") > -1;
-    if (hasComma && hasDot)
-        s = s.replace(/\./g, "").replace(",", "."); // 1.234,56 -> 1234.56
-    else if (hasComma)
-        s = s.replace(",", "."); // 1234,56 -> 1234.56
-    else if (hasDot) {
-        // só ponto: milhar ou decimal?
-        const parts = s.split(".");
-        const last = parts[parts.length - 1];
-        if (parts.length > 2 || last.length === 3) s = s.replace(/\./g, ""); // 1.600 / 1.234.567 -> milhar
-    } // 1.5 permanece decimal
-    const v = parseFloat(s);
-    return isNaN(v) ? 0 : v;
-}
+/* ---------------- input parsing ---------------- */
 
-/* ---------------- modelo financeiro ---------------- */
-function compute() {
-    const lance = +S.lance || 0,
-        venda = +S.venda || 0,
-        prazo = +S.prazo || 0;
-    let totalUser = 0,
-        pctVendaTotal = 0;
-    const lines = [];
-    for (const d of S.despesas) {
-        let v = 0;
-        if (d.tipo === "fixo") v = +d.valor || 0;
-        else if (d.tipo === "mensal") v = (+d.valor || 0) * prazo;
-        else if (d.tipo === "pctLance") v = (+d.pct || 0) * lance;
-        else if (d.tipo === "pctVenda") {
-            v = (+d.pct || 0) * venda;
-            pctVendaTotal += v;
+// Parse a user-typed number that may use Brazilian formatting
+// (dot as thousands separator, comma as decimal), returning 0 for
+// anything that isn't a valid number.
+function parseNumber(input) {
+    if (typeof input === "number") return input;
+    if (input == null || input === "") return 0;
+
+    let text = String(input).trim().replace(/[^\d.,-]/g, "");
+    if (text === "") return 0;
+
+    const hasComma = text.includes(",");
+    const hasDot = text.includes(".");
+
+    if (hasComma && hasDot) {
+        // "1.234,56" -> dots are thousands, comma is the decimal separator
+        text = text.replace(/\./g, "").replace(",", ".");
+    } else if (hasComma) {
+        // "1234,56" -> "1234.56"
+        text = text.replace(",", ".");
+    } else if (hasDot) {
+        // Only dots: are they thousands separators or a decimal point?
+        const groups = text.split(".");
+        const lastGroup = groups[groups.length - 1];
+        if (groups.length > 2 || lastGroup.length === 3) {
+            text = text.replace(/\./g, ""); // "1.600" / "1.234.567" -> thousands
         }
-        totalUser += v;
-        lines.push({ d, v });
+        // "1.5" is left as a decimal
     }
-    const fin = !!S.financiado;
-    const entrada = fin ? (+S.pctEntrada || 0) * lance : 0;
-    const financiadoVal = fin ? Math.max(lance - entrada, 0) : 0;
-    const aquisicao = fin ? entrada : lance;
-    const parcelaAuto = financiadoVal * 0.0097;
-    const saldoAuto = financiadoVal * (1 - 0.0023809375 * prazo);
-    const parcela = fin
-        ? S.parcelaOverride !== "" && S.parcelaOverride != null
-            ? +S.parcelaOverride
-            : parcelaAuto
-        : 0;
-    const saldo = fin
-        ? S.saldoOverride !== "" && S.saldoOverride != null
-            ? +S.saldoOverride
-            : saldoAuto
-        : 0;
-    const prestacoes = parcela * prazo;
 
-    const totalDespesas = totalUser + prestacoes;
-    const lucroBruto = venda - aquisicao - totalDespesas - saldo;
-    const ir = Math.max(lucroBruto, 0) * (+S.aliquotaIR || 0);
-    const lucroLiquido = lucroBruto - ir;
-    const capitalInvestido = aquisicao + totalDespesas - pctVendaTotal;
-    const roi = capitalInvestido > 0 ? lucroLiquido / capitalInvestido : 0;
+    const value = parseFloat(text);
+    return isNaN(value) ? 0 : value;
+}
+
+// Use the user's manual override when provided, otherwise the estimate.
+function overrideOr(override, estimate) {
+    return override !== "" && override != null ? +override : estimate;
+}
+
+/* ---------------- financial model ---------------- */
+
+// Compute the full deal from the current state: expense breakdown,
+// financing figures, profit, invested capital and ROI.
+function calculateDeal() {
+    const bid = +state.lance || 0;
+    const salePrice = +state.venda || 0;
+    const monthsHeld = +state.prazo || 0;
+
+    // Sum every expense line. Sale commissions (% of sale) are tracked
+    // separately because they are later excluded from invested capital.
+    const expenseLines = [];
+    let userExpensesTotal = 0;
+    let saleCommissionsTotal = 0;
+    for (const expense of state.despesas) {
+        let amount = 0;
+        switch (expense.tipo) {
+            case "fixo":
+                amount = +expense.valor || 0;
+                break;
+            case "mensal":
+                amount = (+expense.valor || 0) * monthsHeld;
+                break;
+            case "pctLance":
+                amount = (+expense.pct || 0) * bid;
+                break;
+            case "pctVenda":
+                amount = (+expense.pct || 0) * salePrice;
+                saleCommissionsTotal += amount;
+                break;
+        }
+        userExpensesTotal += amount;
+        expenseLines.push({ expense, amount });
+    }
+
+    // Financing: pay a down payment now, installments over the holding
+    // period, and settle the remaining balance at sale.
+    const isFinanced = !!state.financiado;
+    const downPayment = isFinanced ? (+state.pctEntrada || 0) * bid : 0;
+    const financedAmount = isFinanced ? Math.max(bid - downPayment, 0) : 0;
+    const acquisitionCost = isFinanced ? downPayment : bid;
+
+    const estimatedMonthlyPayment = financedAmount * ESTIMATED_INSTALLMENT_RATE;
+    const estimatedOutstandingBalance =
+        financedAmount * (1 - monthsHeld / FINANCING_TERM_MONTHS);
+
+    const monthlyPayment = isFinanced
+        ? overrideOr(state.parcelaOverride, estimatedMonthlyPayment)
+        : 0;
+    const outstandingBalance = isFinanced
+        ? overrideOr(state.saldoOverride, estimatedOutstandingBalance)
+        : 0;
+    const totalInstallments = monthlyPayment * monthsHeld;
+
+    // Profit waterfall.
+    const totalExpenses = userExpensesTotal + totalInstallments;
+    const grossProfit = salePrice - acquisitionCost - totalExpenses - outstandingBalance;
+    const incomeTax = Math.max(grossProfit, 0) * (+state.aliquotaIR || 0);
+    const netProfit = grossProfit - incomeTax;
+    const investedCapital = acquisitionCost + totalExpenses - saleCommissionsTotal;
+    const roi = investedCapital > 0 ? netProfit / investedCapital : 0;
 
     return {
-        lines,
-        totalUser,
-        totalDespesas,
-        aquisicao,
-        entrada,
-        financiadoVal,
-        parcela,
-        parcelaAuto,
-        saldo,
-        saldoAuto,
-        prestacoes,
-        lucroBruto,
-        ir,
-        lucroLiquido,
-        capitalInvestido,
+        expenseLines,
+        userExpensesTotal,
+        totalExpenses,
+        acquisitionCost,
+        downPayment,
+        financedAmount,
+        monthlyPayment,
+        estimatedMonthlyPayment,
+        outstandingBalance,
+        estimatedOutstandingBalance,
+        totalInstallments,
+        grossProfit,
+        incomeTax,
+        netProfit,
+        investedCapital,
         roi,
-        fin,
-        venda,
+        isFinanced,
+        salePrice,
     };
 }
 
-/* ---------------- render ---------------- */
-const TIPOS = [
+/* ---------------- expenses table ---------------- */
+const EXPENSE_TYPE_OPTIONS = [
     ["fixo", "Valor fixo"],
     ["mensal", "Mensal (× prazo)"],
     ["pctLance", "% do lance"],
     ["pctVenda", "% da venda"],
 ];
 
-function renderDesp() {
-    const R = compute();
-    const wrap = document.getElementById("despList");
-    wrap.innerHTML = "";
-    S.despesas.forEach((d, i) => {
-        const row = document.createElement("div");
-        row.className = "desp-row";
-        const isPct = d.tipo === "pctLance" || d.tipo === "pctVenda";
-        const line = R.lines.find((l) => l.d === d);
-        const comp = line ? line.v : 0;
-        const showComp = isPct || d.tipo === "mensal";
-        row.innerHTML = `
-      <input value="${escapeAttr(d.nome)}" data-di="${i}" data-df="nome" placeholder="Descrição">
-      <select data-di="${i}" data-df="tipo">${TIPOS.map((t) => `<option value="${t[0]}" ${d.tipo === t[0] ? "selected" : ""}>${t[1]}</option>`).join("")}</select>
-      <div class="valwrap">
-        ${isPct ? "" : '<span class="aff l">R$</span>'}
-        <input class="rowval ${isPct ? "pct" : "money"}" inputmode="decimal" data-di="${i}" data-df="${isPct ? "pct" : "valor"}"
-          value="${isPct ? nf2.format((d.pct || 0) * 100) : nf2.format(d.valor || 0)}">
-        ${isPct ? '<span class="aff r">%</span>' : ""}
-      </div>
-      <button class="del" title="Remover" onclick="delDesp(${i})">×</button>
-      ${showComp ? `<div style="grid-column:1/-1" class="comp">${escapeHtml(d.nome || "—")} = <span class="num">${brl(comp)}</span></div>` : ""}
-    `;
-        wrap.appendChild(row);
-    });
-    document.getElementById("despTotal").textContent = brl(R.totalUser);
-    bindDespInputs();
+function isPercentType(type) {
+    return type === "pctLance" || type === "pctVenda";
 }
 
-function bindDespInputs() {
-    document.querySelectorAll("#despList [data-di]").forEach((el) => {
-        const i = +el.dataset.di,
-            f = el.dataset.df;
-        if (el.tagName === "SELECT") {
-            el.onchange = () => {
-                S.despesas[i].tipo = el.value;
-                renderDesp();
+function renderExpenses() {
+    const result = calculateDeal();
+    const container = document.getElementById("despList");
+    container.innerHTML = "";
+
+    state.despesas.forEach((expense, index) => {
+        const isPercent = isPercentType(expense.tipo);
+        const line = result.expenseLines.find((l) => l.expense === expense);
+        const computedAmount = line ? line.amount : 0;
+        // Percent and monthly rows show what they resolve to in R$.
+        const showComputed = isPercent || expense.tipo === "mensal";
+        const valueField = isPercent ? "pct" : "valor";
+        const displayValue = isPercent
+            ? decimalFormatter.format((expense.pct || 0) * 100)
+            : decimalFormatter.format(expense.valor || 0);
+
+        const row = document.createElement("div");
+        row.className = "desp-row";
+        row.innerHTML = `
+      <input value="${escapeAttr(expense.nome)}" data-di="${index}" data-df="nome" placeholder="Descrição">
+      <select data-di="${index}" data-df="tipo">${EXPENSE_TYPE_OPTIONS.map(
+          ([value, label]) =>
+              `<option value="${value}" ${expense.tipo === value ? "selected" : ""}>${label}</option>`,
+      ).join("")}</select>
+      <div class="valwrap">
+        ${isPercent ? "" : '<span class="aff l">R$</span>'}
+        <input class="rowval ${isPercent ? "pct" : "money"}" inputmode="decimal" data-di="${index}" data-df="${valueField}"
+          value="${displayValue}">
+        ${isPercent ? '<span class="aff r">%</span>' : ""}
+      </div>
+      <button class="del" title="Remover" onclick="delDesp(${index})">×</button>
+      ${showComputed ? `<div style="grid-column:1/-1" class="comp">${escapeHtml(expense.nome || "—")} = <span class="num">${formatBRL(computedAmount)}</span></div>` : ""}
+    `;
+        container.appendChild(row);
+    });
+
+    document.getElementById("despTotal").textContent = formatBRL(result.userExpensesTotal);
+    bindExpenseInputs();
+}
+
+function bindExpenseInputs() {
+    document.querySelectorAll("#despList [data-di]").forEach((element) => {
+        const index = +element.dataset.di;
+        const field = element.dataset.df;
+
+        if (element.tagName === "SELECT") {
+            element.onchange = () => {
+                state.despesas[index].tipo = element.value;
+                renderExpenses();
                 save();
-                renderOut();
+                renderOutput();
             };
-        } else if (f === "nome") {
-            el.oninput = () => {
-                S.despesas[i].nome = el.value;
+        } else if (field === "nome") {
+            element.oninput = () => {
+                state.despesas[index].nome = element.value;
                 save();
-                renderOut();
+                renderOutput();
             };
         } else {
-            el.oninput = () => {
-                const v = parseNum(el.value);
-                if (f === "pct") S.despesas[i].pct = v / 100;
-                else S.despesas[i].valor = v;
+            element.oninput = () => {
+                const value = parseNumber(element.value);
+                if (field === "pct") state.despesas[index].pct = value / 100;
+                else state.despesas[index].valor = value;
                 save();
-                renderOut();
-                const R = compute();
-                document.getElementById("despTotal").textContent = brl(
-                    R.totalUser,
-                );
-                const line = R.lines.find((l) => l.d === S.despesas[i]);
-                const comp = el.closest(".desp-row").querySelector(".comp .num");
-                if (comp && line) comp.textContent = brl(line.v);
+                renderOutput();
+
+                // Update just this row's amount and the grand total in place —
+                // re-rendering the whole list here would drop input focus.
+                const result = calculateDeal();
+                document.getElementById("despTotal").textContent = formatBRL(result.userExpensesTotal);
+                const line = result.expenseLines.find((l) => l.expense === state.despesas[index]);
+                const computedEl = element.closest(".desp-row").querySelector(".comp .num");
+                if (computedEl && line) computedEl.textContent = formatBRL(line.amount);
             };
-            el.onblur = () => {
-                const d = S.despesas[i];
-                el.value =
-                    f === "pct"
-                        ? nf2.format((d.pct || 0) * 100)
-                        : nf2.format(d.valor || 0);
+            element.onblur = () => {
+                const expense = state.despesas[index];
+                element.value =
+                    field === "pct"
+                        ? decimalFormatter.format((expense.pct || 0) * 100)
+                        : decimalFormatter.format(expense.valor || 0);
             };
         }
     });
 }
 
 window.addDesp = function () {
-    S.despesas.push({ id: uid(), nome: "", tipo: "fixo", valor: 0 });
-    renderDesp();
+    state.despesas.push({ id: createId(), nome: "", tipo: "fixo", valor: 0 });
+    renderExpenses();
     save();
-    renderOut();
-};
-window.delDesp = function (i) {
-    S.despesas.splice(i, 1);
-    renderDesp();
-    save();
-    renderOut();
+    renderOutput();
 };
 
-function renderOut() {
-    const R = compute();
-    // id line
+window.delDesp = function (index) {
+    state.despesas.splice(index, 1);
+    renderExpenses();
+    save();
+    renderOutput();
+};
+
+/* ---------------- output panel ---------------- */
+
+function renderOutput() {
+    const result = calculateDeal();
+    renderHeaderSummary();
+    renderVerdict(result);
+    renderCascade(result);
+    document.getElementById("vCapital").textContent = formatBRL(result.investedCapital);
+    renderFinancingFields(result);
+}
+
+// The "type · city · auction date" line in the header.
+function renderHeaderSummary() {
     const parts = [];
-    if (S.tipo) parts.push(`<strong>${escapeHtml(S.tipo)}</strong>`);
-    if (S.cidade) parts.push(escapeHtml(S.cidade));
-    if (S.dataLeilao) parts.push("leilão " + fmtDate(S.dataLeilao));
+    if (state.tipo) parts.push(`<strong>${escapeHtml(state.tipo)}</strong>`);
+    if (state.cidade) parts.push(escapeHtml(state.cidade));
+    if (state.dataLeilao) parts.push("leilão " + formatDate(state.dataLeilao));
     document.getElementById("idline").innerHTML = parts.join(" · ");
+}
 
-    // verdict
-    const hasData = +S.lance > 0 && +S.venda > 0;
-    const top = document.getElementById("vTop"),
-        stamp = document.getElementById("vStamp");
-    const roiEl = document.getElementById("vRoi"),
-        tgt = document.getElementById("vTarget"),
-        mg = document.getElementById("vMargin");
-    tgt.textContent = pct(S.roiMin);
+// The VIÁVEL / INVIÁVEL stamp, ROI and margin against the target ROI.
+function renderVerdict(result) {
+    const top = document.getElementById("vTop");
+    const stamp = document.getElementById("vStamp");
+    const roiEl = document.getElementById("vRoi");
+    const targetEl = document.getElementById("vTarget");
+    const marginEl = document.getElementById("vMargin");
+
+    targetEl.textContent = formatPercent(state.roiMin);
+
+    const hasData = +state.lance > 0 && +state.venda > 0;
     if (!hasData) {
         top.className = "top neutral";
         stamp.innerHTML = "Aguardando dados";
         roiEl.textContent = "—";
-        mg.textContent = "";
-    } else {
-        const go = R.roi >= (+S.roiMin || 0);
-        top.className = "top " + (go ? "go" : "no");
-        stamp.innerHTML = go ? "●&nbsp; VIÁVEL" : "●&nbsp; INVIÁVEL";
-        roiEl.textContent = pct(R.roi);
-        const diff = R.roi - (+S.roiMin || 0);
-        mg.innerHTML =
-            (diff >= 0 ? "+" : "") + (diff * 100).toFixed(1) + " p.p. vs régua";
+        marginEl.textContent = "";
+        return;
     }
 
-    // cascade
-    const c = document.getElementById("cascade");
+    const meetsTarget = result.roi >= (+state.roiMin || 0);
+    top.className = "top " + (meetsTarget ? "go" : "no");
+    stamp.innerHTML = meetsTarget ? "●&nbsp; VIÁVEL" : "●&nbsp; INVIÁVEL";
+    roiEl.textContent = formatPercent(result.roi);
+
+    const marginOverTarget = result.roi - (+state.roiMin || 0);
+    marginEl.innerHTML =
+        (marginOverTarget >= 0 ? "+" : "") +
+        (marginOverTarget * 100).toFixed(1) +
+        " p.p. vs régua";
+}
+
+// The sale → costs → profit waterfall.
+function renderCascade(result) {
     const rows = [];
-    rows.push(cRow("Valor de venda", brl(R.venda), "", ""));
+    rows.push(cascadeRow("Valor de venda", formatBRL(result.salePrice), "", ""));
     rows.push(
-        cRow(
-            R.fin ? "Entrada" : "Lance",
-            "− " + brl(R.aquisicao),
+        cascadeRow(
+            result.isFinanced ? "Entrada" : "Lance",
+            "− " + formatBRL(result.acquisitionCost),
             "minus",
             "",
         ),
     );
     rows.push(
-        cRow(
+        cascadeRow(
             "Total de despesas",
-            "− " + brl(R.totalDespesas),
+            "− " + formatBRL(result.totalExpenses),
             "minus",
-            R.fin ? `inclui ${brl(R.prestacoes)} de prestações` : "",
+            result.isFinanced ? `inclui ${formatBRL(result.totalInstallments)} de prestações` : "",
         ),
     );
-    if (R.fin)
+    if (result.isFinanced) {
         rows.push(
-            cRow(
+            cascadeRow(
                 "Saldo do financiamento",
-                "− " + brl(R.saldo),
+                "− " + formatBRL(result.outstandingBalance),
                 "minus",
                 "quitado na venda",
             ),
         );
+    }
     rows.push('<div class="rule strong"></div>');
-    rows.push(cResult("Lucro bruto", brl(R.lucroBruto), R.lucroBruto >= 0));
+    rows.push(cascadeResult("Lucro bruto", formatBRL(result.grossProfit), result.grossProfit >= 0));
     rows.push(
-        cRow(
+        cascadeRow(
             "Imposto de renda (est.)",
-            "− " + brl(R.ir),
+            "− " + formatBRL(result.incomeTax),
             "minus sub",
-            pct(S.aliquotaIR) + " sobre o lucro",
+            formatPercent(state.aliquotaIR) + " sobre o lucro",
         ),
     );
     rows.push('<div class="rule"></div>');
-    rows.push(
-        cResult("Lucro líquido", brl(R.lucroLiquido), R.lucroLiquido >= 0),
-    );
-    c.innerHTML = rows.join("");
+    rows.push(cascadeResult("Lucro líquido", formatBRL(result.netProfit), result.netProfit >= 0));
+    document.getElementById("cascade").innerHTML = rows.join("");
+}
 
-    document.getElementById("vCapital").textContent = brl(
-        R.capitalInvestido,
-    );
+// The financing block: toggle state, financed amount, and the
+// auto-estimated installment / balance hints.
+function renderFinancingFields(result) {
+    document.getElementById("finBlock").style.display = result.isFinanced ? "block" : "none";
+    document.querySelector('#finseg [data-fin="0"]').classList.toggle("on", !result.isFinanced);
+    document.querySelector('#finseg [data-fin="1"]').classList.toggle("on", result.isFinanced);
+    if (!result.isFinanced) return;
 
-    // financiamento fields
-    document.getElementById("finBlock").style.display = R.fin
-        ? "block"
-        : "none";
-    document
-        .querySelector('#finseg [data-fin="0"]')
-        .classList.toggle("on", !R.fin);
-    document
-        .querySelector('#finseg [data-fin="1"]')
-        .classList.toggle("on", R.fin);
-    if (R.fin) {
-        const fv = document.getElementById("finVal");
-        if (fv) fv.value = brl(R.financiadoVal).replace("R$", "").trim();
-        document.getElementById("parcAuto").textContent =
-            S.parcelaOverride !== "" ? "" : "· auto " + brl(R.parcelaAuto);
-        document.getElementById("saldoAuto").textContent =
-            S.saldoOverride !== "" ? "" : "· auto " + brl(R.saldoAuto);
+    const financedField = document.getElementById("finVal");
+    if (financedField) {
+        financedField.value = formatBRL(result.financedAmount).replace("R$", "").trim();
     }
+    document.getElementById("parcAuto").textContent =
+        state.parcelaOverride !== "" ? "" : "· auto " + formatBRL(result.estimatedMonthlyPayment);
+    document.getElementById("saldoAuto").textContent =
+        state.saldoOverride !== "" ? "" : "· auto " + formatBRL(result.estimatedOutstandingBalance);
 }
 
-function cRow(k, v, cls, sub) {
-    return `<div class="row ${cls}"><span class="k">${k}${sub ? `<small>${sub}</small>` : ""}</span><span class="v num">${v}</span></div>`;
-}
-function cResult(k, v, pos) {
-    return `<div class="row result ${pos ? "pos" : "neg"}"><span class="k">${k}</span><span class="v num">${v}</span></div>`;
-}
-function pct(f) {
-    return ((+f || 0) * 100).toFixed(1).replace(".", ",") + "%";
+function cascadeRow(label, value, modifier, sub) {
+    return `<div class="row ${modifier}"><span class="k">${label}${sub ? `<small>${sub}</small>` : ""}</span><span class="v num">${value}</span></div>`;
 }
 
-/* ---------------- bindings ---------------- */
-function bindMain() {
-    document.querySelectorAll("[data-k]").forEach((el) => {
-        const k = el.dataset.k,
-            fmt = el.dataset.fmt;
-        // init value
-        if (el.type === "date") {
-            el.value = S[k] || "";
-        } else if (el.tagName === "SELECT") {
-            el.value = S[k] || "";
-        } else if (fmt === "money" || fmt === "plain") {
-            el.value = S[k] ? nf2.format(S[k]) : "";
-        } else if (fmt === "pct") {
-            el.value =
-                S[k] !== "" && S[k] != null ? nf2.format(+S[k] * 100) : "";
+function cascadeResult(label, value, positive) {
+    return `<div class="row result ${positive ? "pos" : "neg"}"><span class="k">${label}</span><span class="v num">${value}</span></div>`;
+}
+
+function formatPercent(fraction) {
+    return ((+fraction || 0) * 100).toFixed(1).replace(".", ",") + "%";
+}
+
+/* ---------------- main form bindings ---------------- */
+
+function bindMainInputs() {
+    document.querySelectorAll("[data-k]").forEach((element) => {
+        const key = element.dataset.k;
+        const format = element.dataset.fmt;
+
+        // Populate the field from state in the format it expects.
+        if (element.type === "date" || element.tagName === "SELECT") {
+            element.value = state[key] || "";
+        } else if (format === "money" || format === "plain") {
+            element.value = state[key] ? decimalFormatter.format(state[key]) : "";
+        } else if (format === "pct") {
+            element.value =
+                state[key] !== "" && state[key] != null ? decimalFormatter.format(+state[key] * 100) : "";
         } else {
-            el.value = S[k] || "";
+            element.value = state[key] || "";
         }
 
-        const handler = () => {
-            if (fmt === "money" || fmt === "plain") S[k] = parseNum(el.value);
-            else if (fmt === "pct") S[k] = parseNum(el.value) / 100;
-            else S[k] = el.value;
+        const handleChange = () => {
+            if (format === "money" || format === "plain") state[key] = parseNumber(element.value);
+            else if (format === "pct") state[key] = parseNumber(element.value) / 100;
+            else state[key] = element.value;
             save();
-            renderOut();
-            if (k === "lance" || k === "venda" || k === "prazo") {
-                renderDesp();
+            renderOutput();
+            // Bid, sale price and holding period feed the per-expense
+            // computations, so the expense list must be refreshed too.
+            if (key === "lance" || key === "venda" || key === "prazo") {
+                renderExpenses();
             }
         };
-        if (el.tagName === "SELECT" || el.type === "date")
-            el.onchange = handler;
-        else {
-            el.oninput = handler;
-            if (fmt === "money" || fmt === "plain")
-                el.onblur = () => {
-                    el.value = S[k] ? nf2.format(S[k]) : "";
+
+        if (element.tagName === "SELECT" || element.type === "date") {
+            element.onchange = handleChange;
+        } else {
+            element.oninput = handleChange;
+            // Reformat the number once the user leaves the field.
+            if (format === "money" || format === "plain") {
+                element.onblur = () => {
+                    element.value = state[key] ? decimalFormatter.format(state[key]) : "";
                 };
-            if (fmt === "pct")
-                el.onblur = () => {
-                    el.value =
-                        S[k] !== "" && S[k] != null ? nf2.format(+S[k] * 100) : "";
+            } else if (format === "pct") {
+                element.onblur = () => {
+                    element.value =
+                        state[key] !== "" && state[key] != null
+                            ? decimalFormatter.format(+state[key] * 100)
+                            : "";
                 };
+            }
         }
     });
-    document.querySelectorAll("#finseg button").forEach((b) => {
-        b.onclick = () => {
-            S.financiado = +b.dataset.fin;
+
+    // Cash vs financed toggle.
+    document.querySelectorAll("#finseg button").forEach((button) => {
+        button.onclick = () => {
+            state.financiado = +button.dataset.fin;
             save();
-            renderOut();
-            renderDesp();
+            renderOutput();
+            renderExpenses();
         };
     });
 }
 
-/* ---------------- persistência ---------------- */
-const KEY = "viab_leilao_v1";
+/* ---------------- persistence ---------------- */
+
 function save() {
     try {
-        localStorage.setItem(KEY, JSON.stringify(S));
-    } catch (e) { }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {}
 }
-function load() {
+
+function loadStoredState() {
     try {
-        const r = localStorage.getItem(KEY);
-        return r ? JSON.parse(r) : null;
+        const raw = localStorage.getItem(STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
     } catch (e) {
         return null;
     }
 }
+
 window.resetAll = function () {
     if (confirm("Limpar tudo e começar uma nova análise?")) {
-        S = DEFAULT_STATE();
+        state = createDefaultState();
         save();
         boot();
     }
 };
+
 window.exportJSON = function () {
-    const name =
-        (S.tipo || "analise") +
-        "_" +
-        (S.cidade || "").replace(/\W+/g, "") +
-        ".json";
-    const blob = new Blob([JSON.stringify(S, null, 2)], {
-        type: "application/json",
-    });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = name.replace(/^_+/, "");
-    a.click();
+    const fileName =
+        (state.tipo || "analise") + "_" + (state.cidade || "").replace(/\W+/g, "") + ".json";
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = fileName.replace(/^_+/, "");
+    link.click();
 };
-window.importJSON = function (ev) {
-    const f = ev.target.files[0];
-    if (!f) return;
-    const r = new FileReader();
-    r.onload = () => {
+
+window.importJSON = function (event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
         try {
-            S = Object.assign(DEFAULT_STATE(), JSON.parse(r.result));
-            if (!Array.isArray(S.despesas) || !S.despesas.length)
-                S.despesas = DEFAULT_DESP();
+            state = Object.assign(createDefaultState(), JSON.parse(reader.result));
+            if (!Array.isArray(state.despesas) || !state.despesas.length) {
+                state.despesas = createDefaultExpenses();
+            }
             save();
             boot();
         } catch (e) {
             alert("Arquivo inválido.");
         }
     };
-    r.readAsText(f);
-    ev.target.value = "";
+    reader.readAsText(file);
+    event.target.value = "";
 };
 
 /* ---------------- helpers ---------------- */
-function escapeHtml(s) {
-    return String(s || "").replace(
+
+function escapeHtml(value) {
+    return String(value || "").replace(
         /[&<>"]/g,
-        (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[m],
+        (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char],
     );
 }
 
-function escapeAttr(s) {
-    return escapeHtml(s).replace(/"/g, "&quot;");
+function escapeAttr(value) {
+    return escapeHtml(value).replace(/"/g, "&quot;");
 }
 
-function fmtDate(s) {
+// "2026-07-20" -> "20/07/2026"
+function formatDate(isoDate) {
     try {
-        const [y, m, d] = s.split("-");
-        return `${d}/${m}/${y}`;
+        const [year, month, day] = isoDate.split("-");
+        return `${day}/${month}/${year}`;
     } catch (e) {
-        return s;
+        return isoDate;
     }
 }
 
+/* ---------------- bootstrap ---------------- */
+
 function boot() {
-    bindMain();
-    renderDesp();
-    renderOut();
+    bindMainInputs();
+    renderExpenses();
+    renderOutput();
 }
+
 boot();
